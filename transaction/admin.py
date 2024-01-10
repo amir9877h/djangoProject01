@@ -15,4 +15,4 @@ class TransactionAdmin(admin.ModelAdmin):
 @register(UserBalance)
 class UserBalanceAdmin(admin.ModelAdmin):
     list_display = ('user', 'balance', 'created_at')
-    serch_fields = ('user__username',)
+    search_fields = ('user__username',)
