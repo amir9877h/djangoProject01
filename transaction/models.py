@@ -1,5 +1,5 @@
 from django.contrib.auth.models import User
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Count, Sum, Q
 from django.db.models.functions import Coalesce
 
@@ -46,9 +46,9 @@ class Transaction(models.Model):
     @classmethod
     def user_balance(cls, user):
         positive_transactions = Sum('amount', filter=Q(
-            transactions__transaction_type__in=[cls.CHARGE, cls.TRANSFER_RECEIVED]))
+            transaction_type__in=[cls.CHARGE, cls.TRANSFER_RECEIVED]))
         negative_transactions = Sum('amount', filter=Q(
-            transactions__transaction_type__in=[cls.PURCHASE, cls.TRANSFER_SENT]))
+            transaction_type__in=[cls.PURCHASE, cls.TRANSFER_SENT]))
 
         user_balance = user.transactions.all().aggregate(
             balance=Coalesce(positive_transactions, 0) - Coalesce(negative_transactions, 0))
@@ -87,11 +87,30 @@ class TransferTransaction(models.Model):
     def transfer(cls, sender_user, receiver_user, amount):
         if Transaction.user_balance(sender_user) < amount:
             return "Transfer not Allowed, insufficient balance"
-        sender_transaction = Transaction.objects.create(
-            user=sender_user, amount=amount, transaction_type=Transaction.TRANSFER_SENT
-        )
-        receiver_transaction = Transaction.objects.create(
-            user=receiver_user, amount=amount, transaction_type=Transaction.TRANSFER_RECEIVED
-        )
-        instance = cls.objects.create(sender_transaction=sender_transaction, receiver_transaction=receiver_transaction)
+        with transaction.atomic():
+            sender_transaction = Transaction.objects.create(
+                user=sender_user, amount=amount, transaction_type=Transaction.TRANSFER_SENT
+            )
+            receiver_transaction = Transaction.objects.create(
+                user=receiver_user, amount=amount, transaction_type=Transaction.TRANSFER_RECEIVED
+            )
+            instance = cls.objects.create(sender_transaction=sender_transaction,
+                                          receiver_transaction=receiver_transaction)
         return instance
+
+
+class UserScore(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    score = models.PositiveSmallIntegerField(default=0)
+
+    @classmethod
+    def change_score(cls, user, score):
+        # select_for_update => for lock
+        instance = cls.objects.select_for_update.filter(user=user)
+        with transaction.atomic():
+            if not instance.exists():
+                instance = cls.objects.create(user=user, score=0)
+            else:
+                instance = instance.first()
+            instance.score += score
+            instance.save()
